@@ -9,7 +9,7 @@
  *            evicted when cache exceeds MAX_TILE_ENTRIES)
  */
 
-const VERSION = 'v8';
+const VERSION = 'v9';
 const SHELL_CACHE = `hypermap-shell-${VERSION}`;
 const DATA_CACHE  = `hypermap-data-${VERSION}`;
 const TILE_CACHE  = `hypermap-tiles-${VERSION}`;

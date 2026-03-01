@@ -1,64 +1,62 @@
 /**
- * cityLookup.js
- * Nearest-city search using spatial hash grid.
- * Hot path: zero allocations, zero sqrt, 5-20 comparisons.
+ * cityLookup.js — nearest-city search
+ *
+ * Strategy:
+ *   1. Search 3×3 cell block (~75km radius)     — covers dense areas
+ *   2. If empty, search 7×7 block (~175km)       — covers sparse areas
+ *   3. If still empty, linear scan all cities    — guaranteed result
+ *      (3095 comparisons, ~0.05ms — trivial)
  */
 
 import { CELL_DEG, COLS, ROWS } from './constants.js';
 
-/**
- * Find the nearest city to (lat, lng).
- *
- * @param {number} lat
- * @param {number} lng
- * @param {object} cityData  - from dataLoader.loadCityData()
- * @returns {{ name: string, lat: number, lng: number, pop: number, cc: string, distKm: number }|null}
- */
 export function findNearestCity(lat, lng, cityData) {
-  const {
-    cityLats, cityLngs, cityPops, cityCCIdx, getCityName,
-    cellMap, cityRefs, ccCodes,
-    cols = COLS, rows = ROWS, cellDeg = CELL_DEG,
-  } = cityData;
+  const { cityLats, cityLngs, cityPops, cityCCIdx, getCityName, cellMap, cityRefs, ccCodes } = cityData;
+  const cols    = cityData.cols    ?? COLS;
+  const rows    = cityData.rows    ?? ROWS;
+  const cellDeg = cityData.cellDeg ?? CELL_DEG;
 
-  // ── Step 1: compute base cell ──
   const col0 = Math.max(0, Math.min(cols - 1, ((lng + 180.0) / cellDeg) | 0));
   const row0 = Math.max(0, Math.min(rows - 1, ((90.0 - lat)  / cellDeg) | 0));
 
-  let bestDist2 = Infinity;
   let bestIdx   = -1;
+  let bestDist2 = Infinity;
 
-  // ── Step 2: search 3×3 neighbor block ──
-  for (let dr = -1; dr <= 1; dr++) {
-    const row = row0 + dr;
-    if (row < 0 || row >= rows) continue;
-
-    for (let dc = -1; dc <= 1; dc++) {
-      const col = col0 + dc;
-      if (col < 0 || col >= cols) continue;
-
-      const key  = row * cols + col;
-      const cell = cellMap.get(key);
-      if (!cell) continue;
-
-      // Cities in this cell are pre-sorted by population desc
-      for (let r = cell.start; r < cell.end; r++) {
-        const i    = cityRefs[r];
-        const dlat = cityLats[i] - lat;
-        const dlng = cityLngs[i] - lng;
-        const d2   = dlat * dlat + dlng * dlng;  // squared — no sqrt!
-        if (d2 < bestDist2) {
-          bestDist2 = d2;
-          bestIdx   = i;
+  // ── Pass 1: 3×3, Pass 2: extend to 7×7 ring ────────────────────────────
+  for (const radius of [1, 3]) {
+    for (let dr = -radius; dr <= radius; dr++) {
+      const row = row0 + dr;
+      if (row < 0 || row >= rows) continue;
+      for (let dc = -radius; dc <= radius; dc++) {
+        if (radius === 3 && Math.abs(dr) <= 1 && Math.abs(dc) <= 1) continue; // skip already-searched inner ring
+        const col = col0 + dc;
+        if (col < 0 || col >= cols) continue;
+        const cell = cellMap.get((row * cols + col) >>> 0);
+        if (!cell) continue;
+        for (let r = cell.start; r < cell.end; r++) {
+          const i = cityRefs[r];
+          const dlat = cityLats[i] - lat;
+          const dlng = cityLngs[i] - lng;
+          const d2   = dlat * dlat + dlng * dlng;
+          if (d2 < bestDist2) { bestDist2 = d2; bestIdx = i; }
         }
       }
+    }
+    if (bestIdx !== -1) break;
+  }
+
+  // ── Pass 3: global linear scan — always finds something ─────────────────
+  if (bestIdx === -1) {
+    const n = cityData.numCities;
+    for (let i = 0; i < n; i++) {
+      const dlat = cityLats[i] - lat;
+      const dlng = cityLngs[i] - lng;
+      const d2   = dlat * dlat + dlng * dlng;
+      if (d2 < bestDist2) { bestDist2 = d2; bestIdx = i; }
     }
   }
 
   if (bestIdx === -1) return null;
-
-  // Haversine distance for display only (not in hot path)
-  const distKm = haversine(lat, lng, cityLats[bestIdx], cityLngs[bestIdx]);
 
   return {
     name:   getCityName(bestIdx),
@@ -66,19 +64,14 @@ export function findNearestCity(lat, lng, cityData) {
     lng:    cityLngs[bestIdx],
     pop:    cityPops[bestIdx],
     cc:     ccCodes[cityCCIdx[bestIdx]] ?? '??',
-    distKm,
+    distKm: haversine(lat, lng, cityLats[bestIdx], cityLngs[bestIdx]),
   };
 }
 
-// Haversine (only called for display, not in hot path)
 function haversine(lat1, lon1, lat2, lon2) {
-  const R  = 6371;
-  const dL = ((lat2 - lat1) * Math.PI) / 180;
-  const dG = ((lon2 - lon1) * Math.PI) / 180;
-  const a  =
-    Math.sin(dL / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-    Math.cos((lat2 * Math.PI) / 180) *
-    Math.sin(dG / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const R = 6371;
+  const dL = (lat2 - lat1) * Math.PI / 180;
+  const dG = (lon2 - lon1) * Math.PI / 180;
+  const a  = Math.sin(dL/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dG/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }

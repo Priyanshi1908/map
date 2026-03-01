@@ -68,13 +68,28 @@ export async function loadCountryColors() {
 // ─── City binary data ───────────────────────────────────────────────────────
 
 export async function loadCityData() {
-  const [citiesBuf, gridBuf, namesBuf, metaResp, ccResp] = await Promise.all([
-    fetch(DATA_BASE + 'cities.bin').then(r => r.arrayBuffer()),
-    fetch(DATA_BASE + 'city_grid.bin').then(r => r.arrayBuffer()),
-    fetch(DATA_BASE + 'city_names.bin').then(r => r.arrayBuffer()),
+  const [citiesRes, gridRes, namesRes, metaResp, ccResp, geoRes] = await Promise.all([
+    fetch(DATA_BASE + 'cities.bin'),
+    fetch(DATA_BASE + 'city_grid.bin'),
+    fetch(DATA_BASE + 'city_names.bin'),
     fetch(DATA_BASE + 'metadata.json').then(r => r.json()),
     fetch(DATA_BASE + 'cc_codes.json').then(r => r.json()),
+    fetch(DATA_BASE + 'countries_visible.geojson'),
   ]);
+
+  const [citiesBuf, gridBuf, namesBuf, geoText] = await Promise.all([
+    citiesRes.arrayBuffer(),
+    gridRes.arrayBuffer(),
+    namesRes.arrayBuffer(),
+    geoRes.text(),
+  ]);
+
+  const rawSizes = {
+    cities: citiesBuf.byteLength,
+    grid:   gridBuf.byteLength,
+    names:  namesBuf.byteLength,
+    geo:    geoText.length,   // approximate (UTF-8 chars ≈ bytes for ASCII-heavy JSON)
+  };
 
   const meta = metaResp;
 
@@ -147,21 +162,11 @@ export async function loadCityData() {
   }
 
   return {
-    // City arrays
-    cityLats,
-    cityLngs,
-    cityPops,
-    cityCCIdx,
-    getCityName,
+    cityLats, cityLngs, cityPops, cityCCIdx, getCityName,
     numCities,
-    // Grid
-    cellMap,
-    cellDeg,
-    cols,
-    rows,
-    // City refs
+    cellMap, cellDeg, cols, rows,
     cityRefs,
-    // Country codes list
     ccCodes: ccResp,
+    _rawSizes: rawSizes,
   };
 }

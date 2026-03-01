@@ -1,7 +1,7 @@
 {
-  "numCities": 33357,
-  "numCells": 18885,
-  "totalRefs": 33357,
+  "numCities": 3095,
+  "numCells": 2991,
+  "totalRefs": 3095,
   "cols": 1440,
   "rows": 720,
   "cellDeg": 0.25,
@@ -239,7 +239,6 @@
     "US",
     "UY",
     "UZ",
-    "VA",
     "VC",
     "VE",
     "VG",

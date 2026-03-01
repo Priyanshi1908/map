@@ -22,8 +22,8 @@ export const DATA_BASE = '/data/';
 export const MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 
 // Highlight color for selected country
-export const HIGHLIGHT_COLOR = '#ff6b35';
-export const HIGHLIGHT_OPACITY = 0.4;
+export const HIGHLIGHT_COLOR = '#ef476f';
+export const HIGHLIGHT_OPACITY = 0.40;
 
 // Ocean / no-data color sentinel
 export const OCEAN_ID = 0;

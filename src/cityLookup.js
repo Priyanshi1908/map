@@ -59,6 +59,7 @@ export function findNearestCity(lat, lng, cityData) {
   if (bestIdx === -1) return null;
 
   return {
+    idx:    bestIdx,
     name:   getCityName(bestIdx),
     lat:    cityLats[bestIdx],
     lng:    cityLngs[bestIdx],

@@ -3,8 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="theme-color" content="#0a0a0f" />
-  <title>HyperMap — Instant World Map Lookup</title>
+  <meta name="theme-color" content="#f0f4ff" />
+  <title>HyperMap — World Lookup</title>
+
+  <!-- Fonts: Nunito (rounded, bubbly, game-like) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -12,108 +18,156 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #0a0a0f;
-      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: #e8edf8;
+      font-family: 'Nunito', system-ui, -apple-system, sans-serif;
       -webkit-tap-highlight-color: transparent;
     }
 
     #map {
       width: 100vw;
       height: 100vh;
-      cursor: crosshair;
     }
 
-    /* Loading screen */
+    .maplibregl-canvas { cursor: crosshair !important; }
+
+    /* Restyle MapLibre attribution */
+    .maplibregl-ctrl-attrib {
+      background: rgba(255, 255, 255, 0.85) !important;
+      border-radius: 10px !important;
+      backdrop-filter: blur(8px);
+      font-family: 'Nunito', sans-serif !important;
+    }
+    .maplibregl-ctrl-attrib a { color: #9a8c98 !important; font-size: 10px !important; }
+
+    /* Nav controls — bubbly white pill */
+    .maplibregl-ctrl-group {
+      background: rgba(255, 255, 255, 0.92) !important;
+      border-radius: 16px !important;
+      border: 1.5px solid rgba(0, 0, 0, 0.07) !important;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06) !important;
+      overflow: hidden;
+      backdrop-filter: blur(12px);
+    }
+    .maplibregl-ctrl-group button {
+      background: transparent !important;
+      border: none !important;
+      color: #4a4e69 !important;
+      font-size: 18px !important;
+      width: 34px !important;
+      height: 34px !important;
+    }
+    .maplibregl-ctrl-group button:hover {
+      background: rgba(108, 99, 255, 0.08) !important;
+      color: #6c63ff !important;
+    }
+    .maplibregl-ctrl-group button + button {
+      border-top: 1.5px solid rgba(0, 0, 0, 0.06) !important;
+    }
+    .maplibregl-ctrl-zoom-in .maplibregl-ctrl-icon,
+    .maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon {
+      filter: none !important;
+    }
+
+    /* ── Loading screen ──────────────────────────── */
     #loading {
       position: fixed;
       inset: 0;
-      background: #0a0a0f;
+      background: linear-gradient(135deg, #f0f4ff 0%, #fce4f0 100%);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       z-index: 9999;
-      color: #fff;
-      font: 600 15px/1.5 'Inter', system-ui, sans-serif;
-      gap: 16px;
-      transition: opacity 0.4s ease;
+      gap: 12px;
+      transition: opacity 0.5s ease;
     }
     #loading.fade-out { opacity: 0; pointer-events: none; }
+
+    .loading-globe {
+      font-size: 52px;
+      animation: spin 3s linear infinite;
+      line-height: 1;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+
     .loading-logo {
       font-size: 40px;
-      letter-spacing: -1px;
-      background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
+      font-weight: 900;
+      letter-spacing: -1.5px;
+      line-height: 1;
+      background: linear-gradient(135deg, #6c63ff 0%, #f72585 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
+      font-family: 'Nunito', sans-serif;
     }
+
     .loading-sub {
-      color: #6b7280;
+      color: #9a8c98;
       font-size: 13px;
-      font-weight: 400;
+      font-weight: 700;
+      font-family: 'Nunito', sans-serif;
+      letter-spacing: 0.2px;
     }
+
     .loading-bar-wrap {
-      width: 160px;
-      height: 3px;
-      background: #1f1f2e;
-      border-radius: 2px;
+      width: 140px;
+      height: 6px;
+      background: rgba(108, 99, 255, 0.1);
+      border-radius: 99px;
       overflow: hidden;
+      margin-top: 6px;
     }
     .loading-bar {
       height: 100%;
       width: 0%;
-      background: linear-gradient(90deg, #60a5fa, #a78bfa);
-      border-radius: 2px;
-      transition: width 0.3s ease;
+      background: linear-gradient(90deg, #6c63ff, #f72585);
+      border-radius: 99px;
+      transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
     }
-
-    /* Zoom to map canvas cursor */
-    .maplibregl-canvas { cursor: crosshair !important; }
   </style>
 </head>
 <body>
-  <!-- Loading overlay -->
+
   <div id="loading">
-    <div class="loading-logo">⚡ HyperMap</div>
+    <div class="loading-globe">🌍</div>
+    <div class="loading-logo">HyperMap</div>
     <div class="loading-sub">Loading world data…</div>
     <div class="loading-bar-wrap">
       <div class="loading-bar" id="loading-bar"></div>
     </div>
   </div>
 
-  <!-- Map container -->
   <div id="map"></div>
 
   <script type="module">
-    // Animate loading bar
     const bar = document.getElementById('loading-bar');
     let p = 0;
     const iv = setInterval(() => {
-      p = Math.min(p + Math.random() * 8, 90);
+      p = Math.min(p + Math.random() * 7, 88);
       bar.style.width = p + '%';
-    }, 120);
+    }, 130);
 
-    // Remove loading screen once map is interactive
     window.__mapReady = () => {
       clearInterval(iv);
       bar.style.width = '100%';
       setTimeout(() => {
         const el = document.getElementById('loading');
         el.classList.add('fade-out');
-        setTimeout(() => el.remove(), 400);
-      }, 200);
+        setTimeout(() => el.remove(), 500);
+      }, 180);
     };
   </script>
 
   <script type="module" src="/src/main.js"></script>
 
   <script type="module">
-    // Hook into map load event exposed globally
-    // We use a MutationObserver to detect when the map canvas appears
     const obs = new MutationObserver(() => {
       if (document.querySelector('.maplibregl-canvas-container')) {
         obs.disconnect();
-        // Give map a moment to render
         setTimeout(() => window.__mapReady?.(), 600);
       }
     });

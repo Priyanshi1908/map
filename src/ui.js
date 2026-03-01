@@ -10,8 +10,10 @@ export class UI {
     this._timingEl    = null;
     this._modeToggle  = null;
     this._cityLoading = null;
+    this._searchEl    = null;
     this._mode        = 'country'; // 'country' | 'state' | 'city'
     this._onModeChange = null;
+    this._onSearch     = null;
 
     this._build();
   }
@@ -19,6 +21,7 @@ export class UI {
   get mode() { return this._mode; }
 
   onModeChange(fn) { this._onModeChange = fn; }
+  onSearch(fn)     { this._onSearch = fn; }
 
   showTooltip(html, x, y) {
     const el = this._tooltip;
@@ -135,6 +138,55 @@ export class UI {
     bar.appendChild(loading);
     this._cityLoading = loading;
 
+    // ── Search bar (top-left) ──
+    const search = document.createElement('div');
+    search.id = 'hm-search';
+    search.innerHTML = `
+      <span class="hm-search-label">Lat</span>
+      <input id="hm-search-lat" class="hm-search-field" type="number"
+             step="any" min="-90" max="90"
+             autocomplete="off" placeholder="0.0000" />
+      <span class="hm-search-sep"></span>
+      <span class="hm-search-label">Lng</span>
+      <input id="hm-search-lng" class="hm-search-field" type="number"
+             step="any" min="-180" max="180"
+             autocomplete="off" placeholder="0.0000" />
+      <button id="hm-search-btn" title="Go">↵</button>
+    `;
+    document.body.appendChild(search);
+    this._searchEl = search;
+
+    const latInput = search.querySelector('#hm-search-lat');
+    const lngInput = search.querySelector('#hm-search-lng');
+    const btn      = search.querySelector('#hm-search-btn');
+
+    const fire = () => {
+      const lat = parseFloat(latInput.value);
+      const lng = parseFloat(lngInput.value);
+      const valid = !isNaN(lat) && !isNaN(lng)
+                 && lat >= -90  && lat <= 90
+                 && lng >= -180 && lng <= 180;
+      if (!valid) {
+        search.classList.add('error');
+        setTimeout(() => search.classList.remove('error'), 400);
+        // Focus whichever field is empty / out of range
+        if (isNaN(lat) || lat < -90 || lat > 90) latInput.focus();
+        else lngInput.focus();
+        return;
+      }
+      latInput.blur(); lngInput.blur();
+      if (this._onSearch) this._onSearch({ lat, lng });
+    };
+
+    // Enter from either field fires
+    latInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); lngInput.focus(); lngInput.select(); }
+    });
+    lngInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); fire(); }
+    });
+    btn.addEventListener('click', fire);
+
     // ── Stats panel (bottom-left) ──
     const stats = document.createElement('div');
     stats.id = 'hm-stats';
@@ -143,6 +195,7 @@ export class UI {
       <div class="hm-stat-row"><span class="hm-stat-label">cities.bin</span><span class="hm-stat-val" id="hs-cities">—</span></div>
       <div class="hm-stat-row"><span class="hm-stat-label">city_grid.bin</span><span class="hm-stat-val" id="hs-grid">—</span></div>
       <div class="hm-stat-row"><span class="hm-stat-label">city_names.bin</span><span class="hm-stat-val" id="hs-names">—</span></div>
+      <div class="hm-stat-row"><span class="hm-stat-label">city_boundaries</span><span class="hm-stat-val" id="hs-bounds">—</span></div>
       <div class="hm-stat-row"><span class="hm-stat-label">countries.geojson</span><span class="hm-stat-val" id="hs-geo">—</span></div>
       <div class="hm-stat-row"><span class="hm-stat-label">Total data</span><span class="hm-stat-val" id="hs-total">—</span></div>
       <div class="hm-stat-row"><span class="hm-stat-label">Cities loaded</span><span class="hm-stat-val" id="hs-ncities">—</span></div>
@@ -157,22 +210,24 @@ export class UI {
       ? (b/1024/1024).toFixed(2) + ' MB'
       : b > 0 ? (b/1024).toFixed(1) + ' KB' : '—';
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    if (sizes.cities) set('hs-cities', fmt(sizes.cities));
-    if (sizes.grid)   set('hs-grid',   fmt(sizes.grid));
-    if (sizes.names)  set('hs-names',  fmt(sizes.names));
-    if (sizes.geo)    set('hs-geo',    fmt(sizes.geo));
+    if (sizes.cities)     set('hs-cities', fmt(sizes.cities));
+    if (sizes.grid)       set('hs-grid',   fmt(sizes.grid));
+    if (sizes.names)      set('hs-names',  fmt(sizes.names));
+    if (sizes.boundaries) set('hs-bounds', fmt(sizes.boundaries));
+    if (sizes.geo)        set('hs-geo',    fmt(sizes.geo));
     // Track running total in dataset attribute
     const panel = this._statsEl;
     if (panel) {
       const prev = JSON.parse(panel.dataset.sizes || '{}');
       const merged = {
-        cities: sizes.cities || prev.cities || 0,
-        grid:   sizes.grid   || prev.grid   || 0,
-        names:  sizes.names  || prev.names  || 0,
-        geo:    sizes.geo    || prev.geo    || 0,
+        cities:     sizes.cities     || prev.cities     || 0,
+        grid:       sizes.grid       || prev.grid       || 0,
+        names:      sizes.names      || prev.names      || 0,
+        boundaries: sizes.boundaries || prev.boundaries || 0,
+        geo:        sizes.geo        || prev.geo        || 0,
       };
       panel.dataset.sizes = JSON.stringify(merged);
-      const total = merged.cities + merged.grid + merged.names + merged.geo;
+      const total = merged.cities + merged.grid + merged.names + merged.boundaries + merged.geo;
       set('hs-total', fmt(total));
     }
     if (sizes.numCities) set('hs-ncities', sizes.numCities.toLocaleString() + ' cities');
@@ -182,110 +237,338 @@ export class UI {
 // ── Style injection ──────────────────────────────────────────────────────────
 
 const css = `
+  /* ── Tooltip ────────────────────────────────────────────────────── */
   #hm-tooltip {
-    background: rgba(10,10,15,0.92);
-    color: #fff;
-    border-radius: 8px;
-    padding: 10px 14px;
-    font: 600 13px/1.4 'Inter', system-ui, sans-serif;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.3);
-    max-width: 240px;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255, 255, 255, 0.97);
+    color: #1a1a2e;
+    border-radius: 20px;
+    padding: 14px 18px;
+    font-family: 'Nunito', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    font-weight: 600;
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.12),
+      0 2px 8px rgba(0, 0, 0, 0.06);
+    max-width: 230px;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1.5px solid rgba(0, 0, 0, 0.06);
   }
-  #hm-tooltip .hm-country     { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
-  #hm-tooltip .hm-ocean       { color: #6b7280 !important; }
-  #hm-tooltip .hm-code        { font-size: 11px; color: #6b7280; margin-top: 1px; }
-  #hm-tooltip .hm-city        { font-size: 13px; color: #a0cfff; margin-top: 4px; }
-  #hm-tooltip .hm-city-name   { font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 3px; }
-  #hm-tooltip .hm-country-sub { font-size: 12px; color: #9ca3af; margin-bottom: 3px; }
-  #hm-tooltip .hm-state-name  { font-size: 16px; font-weight: 700; color: #c4b5fd; margin-bottom: 3px; }
-  #hm-tooltip .hm-cc          { color: #6b7280; }
-  #hm-tooltip .hm-dist        { font-size: 11px; color: #888; margin-top: 2px; }
-  #hm-tooltip .hm-coords      { font-size: 10px; color: #555; margin-top: 4px; font-weight: 400; font-family: monospace; }
-  #hm-tooltip .hm-flag        { font-size: 22px; margin-bottom: 4px; display: block; }
 
+  #hm-tooltip .hm-flag {
+    font-size: 28px;
+    margin-bottom: 8px;
+    display: block;
+    line-height: 1;
+  }
+
+  #hm-tooltip .hm-country {
+    font-size: 16px;
+    font-weight: 800;
+    color: #1a1a2e;
+    letter-spacing: -0.3px;
+    margin-bottom: 2px;
+  }
+
+  #hm-tooltip .hm-ocean {
+    color: #c4c1d4 !important;
+    font-weight: 700;
+  }
+
+  #hm-tooltip .hm-code {
+    font-size: 11px;
+    font-weight: 700;
+    color: #b8b2c8;
+    margin-top: 3px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+  }
+
+  #hm-tooltip .hm-code-type {
+    color: #c77dff;
+    letter-spacing: 0.8px;
+  }
+
+  #hm-tooltip .hm-loading {
+    color: #c77dff !important;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  #hm-tooltip .hm-city-name {
+    font-size: 17px;
+    font-weight: 900;
+    color: #1a1a2e;
+    letter-spacing: -0.4px;
+    margin-bottom: 5px;
+  }
+
+  #hm-tooltip .hm-country-sub {
+    font-size: 12px;
+    color: #9a8c98;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+
+  #hm-tooltip .hm-dist {
+    font-size: 12px;
+    font-weight: 700;
+    color: #2ec4b6;
+    margin-top: 5px;
+  }
+
+  #hm-tooltip .hm-coords {
+    font-size: 10px;
+    font-weight: 600;
+    color: #c4c1d4;
+    margin-top: 8px;
+    letter-spacing: 0.3px;
+    padding-top: 8px;
+    border-top: 1.5px solid rgba(0, 0, 0, 0.05);
+  }
+
+  /* ── Search pin marker ────────────────────────────────────────── */
+  .hm-pin {
+    width: 32px;
+    height: 42px;
+    position: relative;
+    filter: drop-shadow(0 4px 10px rgba(108,99,255,0.55));
+    animation: pin-drop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes pin-drop {
+    from { transform: translateY(-14px) scale(0.7); opacity: 0; }
+    to   { transform: translateY(0)     scale(1);   opacity: 1; }
+  }
+  .hm-pin::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 42'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236c63ff'/%3E%3Cstop offset='100%25' stop-color='%23f72585'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M16 0C9.373 0 4 5.373 4 12c0 9 12 30 12 30S28 21 28 12C28 5.373 22.627 0 16 0z' fill='url(%23g)'/%3E%3Ccircle cx='16' cy='12' r='5' fill='white' opacity='0.95'/%3E%3C/svg%3E");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center top;
+  }
+  .hm-pin::after {
+    content: '';
+    position: absolute;
+    bottom: -3px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 10px;
+    height: 5px;
+    background: rgba(108,99,255,0.25);
+    border-radius: 50%;
+    filter: blur(2px);
+  }
+
+  /* ── Controls bar ─────────────────────────────────────────────── */
   #hm-bar {
-    background: rgba(10,10,15,0.85);
-    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 20px;
     padding: 8px 12px;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(255,255,255,0.08);
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3);
-    color: #fff;
-    font: 13px/1 'Inter', system-ui, sans-serif;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1.5px solid rgba(0, 0, 0, 0.07);
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.1),
+      0 2px 8px rgba(0, 0, 0, 0.06);
+    color: #1a1a2e;
+    font-family: 'Nunito', system-ui, sans-serif;
+    font-size: 13px;
+    gap: 10px;
   }
 
   #hm-timing {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 11px;
-    color: #4ade80;
+    font-family: 'Nunito', sans-serif;
+    font-size: 12px;
+    font-weight: 800;
+    color: #2ec4b6;
     min-width: 56px;
     text-align: right;
   }
 
-  /* 3-way segmented control */
+  /* ── Segmented control ─────────────────────────────────────────── */
   #hm-seg {
     display: flex;
-    background: rgba(255,255,255,0.06);
-    border-radius: 7px;
-    padding: 2px;
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 14px;
+    padding: 3px;
     gap: 2px;
   }
   .hm-seg-btn {
     background: transparent;
     border: none;
-    color: #9ca3af;
-    font: 600 12px/1 'Inter', system-ui, sans-serif;
-    padding: 5px 11px;
-    border-radius: 5px;
+    color: #9a8c98;
+    font-family: 'Nunito', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 800;
+    padding: 5px 14px;
+    border-radius: 11px;
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
     user-select: none;
     white-space: nowrap;
+    letter-spacing: 0.1px;
   }
-  .hm-seg-btn:hover  { color: #e5e7eb; background: rgba(255,255,255,0.08); }
-  .hm-seg-btn.active { background: #3b82f6; color: #fff; }
+  .hm-seg-btn:hover {
+    color: #6c63ff;
+    background: rgba(108, 99, 255, 0.08);
+  }
+  .hm-seg-btn.active {
+    background: #6c63ff;
+    color: #ffffff;
+    box-shadow: 0 2px 12px rgba(108, 99, 255, 0.45);
+  }
 
+  /* City loading indicator */
   #hm-city-loading {
+    font-family: 'Nunito', sans-serif;
     font-size: 11px;
-    color: #facc15;
-    transition: opacity 0.3s;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+    color: #c77dff;
+    transition: opacity 0.3s ease;
     pointer-events: none;
   }
 
-  /* Hide MapLibre logo from pick canvas */
-  .maplibregl-ctrl-logo { display: none !important; }
-
-  /* Stats panel */
+  /* ── Stats panel ─────────────────────────────────────────────── */
   #hm-stats {
     position: fixed;
     bottom: 36px;
     left: 12px;
     z-index: 999;
-    background: rgba(10,10,15,0.82);
-    border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 8px;
-    padding: 8px 12px;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3);
-    font: 11px/1.6 'JetBrains Mono','Fira Code',monospace;
-    color: #9ca3af;
-    min-width: 200px;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1.5px solid rgba(0, 0, 0, 0.07);
+    border-radius: 18px;
+    padding: 12px 16px;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(0, 0, 0, 0.06);
+    font-family: 'Nunito', sans-serif;
+    font-size: 11.5px;
+    font-weight: 700;
+    line-height: 1.8;
+    min-width: 215px;
     pointer-events: none;
   }
   .hm-stat-row {
     display: flex;
     justify-content: space-between;
-    gap: 16px;
+    gap: 20px;
   }
-  .hm-stat-label { color: #6b7280; }
-  .hm-stat-val   { color: #4ade80; text-align: right; }
-  .hm-stat-row:first-child .hm-stat-val { color: #60a5fa; }
-  .hm-stat-row:nth-child(6) .hm-stat-val { color: #f472b6; font-weight: 700; }
+  .hm-stat-label { color: #c4c1d4; }
+  .hm-stat-val   { color: #9a8c98; text-align: right; font-weight: 800; }
+
+  /* Last click — indigo */
+  .hm-stat-row:first-child .hm-stat-val { color: #6c63ff; }
+
+  /* Total data — pink */
+  .hm-stat-row:nth-child(7) .hm-stat-val { color: #f72585; }
+
+  /* Cities loaded — teal */
+  .hm-stat-row:nth-child(8) .hm-stat-val { color: #2ec4b6; }
+
+  /* ── Search bar ──────────────────────────────────────────────── */
+  #hm-search {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 999;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 20px;
+    padding: 7px 8px 7px 14px;
+    border: 1.5px solid rgba(0, 0, 0, 0.07);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(0, 0, 0, 0.06);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  #hm-search:focus-within {
+    border-color: rgba(108, 99, 255, 0.45);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 0 0 0 3px rgba(108, 99, 255, 0.14);
+  }
+  #hm-search.error {
+    border-color: rgba(247, 37, 133, 0.5);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 0 0 0 3px rgba(247, 37, 133, 0.12);
+    animation: hm-shake 0.3s ease;
+  }
+  @keyframes hm-shake {
+    0%, 100% { transform: translateX(0); }
+    25%       { transform: translateX(-5px); }
+    75%       { transform: translateX(5px); }
+  }
+
+  /* "Lat" / "Lng" labels */
+  .hm-search-label {
+    font-family: 'Nunito', sans-serif;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: #9a8c98;
+    flex-shrink: 0;
+    user-select: none;
+  }
+
+  /* Number input fields */
+  .hm-search-field {
+    border: none;
+    outline: none;
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 9px;
+    font-family: 'Nunito', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    color: #1a1a2e;
+    width: 80px;
+    padding: 4px 8px;
+    text-align: center;
+    transition: background 0.15s ease;
+    /* hide browser number spinners */
+    -moz-appearance: textfield;
+  }
+  .hm-search-field::-webkit-outer-spin-button,
+  .hm-search-field::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .hm-search-field::placeholder { color: #c4c1d4; font-weight: 600; }
+  .hm-search-field:focus { background: rgba(108, 99, 255, 0.07); }
+
+  /* divider dot between the two fields */
+  .hm-search-sep {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #d4cfe4;
+    flex-shrink: 0;
+  }
+
+  #hm-search-btn {
+    background: #6c63ff;
+    border: none;
+    border-radius: 12px;
+    color: #fff;
+    font-size: 15px;
+    font-family: 'Nunito', sans-serif;
+    font-weight: 900;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-left: 2px;
+    transition: background 0.15s ease, transform 0.1s ease;
+    line-height: 1;
+  }
+  #hm-search-btn:hover  { background: #5a52d5; transform: scale(1.06); }
+  #hm-search-btn:active { transform: scale(0.94); }
+
+  /* Hide MapLibre logo */
+  .maplibregl-ctrl-logo { display: none !important; }
 `;
 
 const styleEl = document.createElement('style');

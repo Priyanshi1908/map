@@ -11,7 +11,7 @@ import { CountryPicker } from './countryPicker.js';
 import { findNearestCity } from './cityLookup.js';
 import { UI } from './ui.js';
 
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && location.hostname !== 'localhost') {
   navigator.serviceWorker.register('/sw.js').catch(err =>
     console.warn('[SW] Registration failed:', err)
   );
@@ -28,12 +28,13 @@ let cityLoadProm = null;
 let lastHighlight       = null;  // { source, id }
 let mapReady            = false;
 let pickerReady         = false;
+let searchMarker        = null;
 
 // ─── Map ────────────────────────────────────────────────────────────────────
 
 const map = new maplibregl.Map({
   container: 'map',
-  style:     'https://tiles.openfreemap.org/styles/liberty',
+  style:     'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
   center:    [0, 20],
   zoom:      2,
   maxPitch:  0,
@@ -69,6 +70,52 @@ function ensureCityData() {
 ui.onModeChange(mode => {
   if (mode === 'prefetch' || mode === 'city') ensureCityData();
   clearHighlight();
+});
+
+ui.onSearch(({ lat, lng }) => {
+  if (!mapReady || !pickerReady) return;
+  clearSearchMarker();
+  clearHighlight();
+
+  const zoom = map.getZoom() < 4 ? 6 : map.getZoom();
+  map.jumpTo({ center: [lng, lat], zoom });
+
+  map.once('idle', () => {
+    // Build info regardless of current mode
+    const sp = map.project([lng, lat]);
+    const country = picker.pick(sp.x, sp.y);
+    let html = '';
+
+    if (country) {
+      html += `<span class="hm-flag">${toFlag(country.code)}</span>`;
+      html += `<div class="hm-country">${esc(country.name)}</div>`;
+    }
+
+    if (cityData) {
+      const city = findNearestCity(lat, lng, cityData);
+      if (city) {
+        html += `<div class="hm-city-name">${esc(city.name)}</div>`;
+        const km = city.distKm < 1  ? (city.distKm * 1000).toFixed(0) + ' m'
+                 : city.distKm < 10 ? city.distKm.toFixed(1) + ' km'
+                 :                    Math.round(city.distKm) + ' km';
+        html += `<div class="hm-dist">${km} away · pop ${fmtPop(city.pop)}</div>`;
+      }
+    }
+
+    html += `<div class="hm-coords">${lat.toFixed(4)}°, ${lng.toFixed(4)}°</div>`;
+
+    // Place a pin marker at exact spot
+    const el = document.createElement('div');
+    el.className = 'hm-pin';
+    searchMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+      .setLngLat([lng, lat])
+      .addTo(map);
+
+    // Show tooltip at the marker's screen position
+    const pt   = map.project([lng, lat]);
+    const rect = map.getCanvas().getBoundingClientRect();
+    ui.showTooltip(html, rect.left + pt.x, rect.top + pt.y);
+  });
 });
 
 // ─── Map load ────────────────────────────────────────────────────────────
@@ -118,16 +165,43 @@ map.on('load', async () => {
 
   map.addLayer({ id: 'state-highlight', type: 'fill', source: 'states',
     paint: {
-      'fill-color': '#a78bfa',
-      'fill-opacity': ['case', ['boolean', ['feature-state', 'highlighted'], false], 0.35, 0],
+      'fill-color': '#c77dff',
+      'fill-opacity': ['case', ['boolean', ['feature-state', 'highlighted'], false], 0.38, 0],
     }
   });
 
   map.addLayer({ id: 'state-highlight-border', type: 'line', source: 'states',
     paint: {
-      'line-color': '#a78bfa',
+      'line-color': '#c77dff',
       'line-width': ['case', ['boolean', ['feature-state', 'highlighted'], false], 1.5, 0],
       'line-opacity': 0.85,
+    }
+  });
+
+  // ── City boundaries ──
+  const cbResp = await fetch('/data/city_boundaries.geojson');
+  const cbText = await cbResp.text();
+  ui.setDataSizes({ boundaries: cbText.length });
+  const cbJson = JSON.parse(cbText);
+
+  map.addSource('city-boundaries', {
+    type: 'geojson',
+    data: cbJson,
+    generateId: false,
+  });
+
+  map.addLayer({ id: 'city-boundary-highlight', type: 'fill', source: 'city-boundaries',
+    paint: {
+      'fill-color': '#2ec4b6',
+      'fill-opacity': ['case', ['boolean', ['feature-state', 'highlighted'], false], 0.30, 0],
+    }
+  });
+
+  map.addLayer({ id: 'city-boundary-border', type: 'line', source: 'city-boundaries',
+    paint: {
+      'line-color': '#2ec4b6',
+      'line-width': ['case', ['boolean', ['feature-state', 'highlighted'], false], 1.5, 0],
+      'line-opacity': 0.9,
     }
   });
 
@@ -175,14 +249,14 @@ function handleInteraction(clientX, clientY) {
       if (country) html += `<span class="hm-flag">${toFlag(country.code)}</span>`;
       html += `<div class="hm-country">${esc(state.name)}</div>`;
       if (state.country) html += `<div class="hm-code">${esc(state.country)}</div>`;
-      if (state.type)    html += `<div class="hm-code" style="color:#a78bfa">${esc(state.type)}</div>`;
+      if (state.type)    html += `<div class="hm-code hm-code-type">${esc(state.type)}</div>`;
     } else {
       clearHighlight();
       const country = picker.pick(px, py);
       if (country) {
         html += `<span class="hm-flag">${toFlag(country.code)}</span>`;
         html += `<div class="hm-country">${esc(country.name)}</div>`;
-        html += `<div class="hm-code" style="color:#6b7280">No state data</div>`;
+        html += `<div class="hm-code">No state data</div>`;
       } else {
         html += `<div class="hm-country hm-ocean">Ocean / No Data</div>`;
       }
@@ -191,14 +265,15 @@ function handleInteraction(clientX, clientY) {
   } else {
     // ── City mode ──
     const country = picker.pick(px, py);
-    clearHighlight();
 
     if (!cityData) {
-      html += `<div class="hm-country" style="color:#facc15">Loading city data…</div>`;
+      clearHighlight();
+      html += `<div class="hm-country hm-loading">Loading city data…</div>`;
     } else {
       const city = findNearestCity(lat, lng, cityData);
       if (city) {
-        html += `<div class="hm-city-name">📍 ${esc(city.name)}</div>`;
+        setHighlight('city-boundaries', city.idx);
+        html += `<div class="hm-city-name">${esc(city.name)}</div>`;
         if (country)
           html += `<div class="hm-country-sub">${toFlag(country.code)} ${esc(country.name)}</div>`;
         const km = city.distKm < 1  ? (city.distKm * 1000).toFixed(0) + ' m'
@@ -206,6 +281,7 @@ function handleInteraction(clientX, clientY) {
                  :                    Math.round(city.distKm) + ' km';
         html += `<div class="hm-dist">${km} away · pop ${fmtPop(city.pop)}</div>`;
       } else {
+        clearHighlight();
         html += `<div class="hm-country hm-ocean">No city found</div>`;
       }
     }
@@ -225,12 +301,13 @@ function pickState(px, py) {
 }
 
 // Click
-map.getCanvas().addEventListener('click', e => handleInteraction(e.clientX, e.clientY), { passive: true });
+map.getCanvas().addEventListener('click', e => { clearSearchMarker(); handleInteraction(e.clientX, e.clientY); }, { passive: true });
 
 // Touch
 map.getCanvas().addEventListener('touchend', e => {
   if (e.changedTouches.length === 1 && e.timeStamp - (map._tapStart || 0) < 300) {
     e.preventDefault();
+    clearSearchMarker();
     const t = e.changedTouches[0];
     handleInteraction(t.clientX, t.clientY);
   }
@@ -251,6 +328,12 @@ function clearHighlight() {
   if (!lastHighlight) return;
   map.setFeatureState({ source: lastHighlight.source, id: lastHighlight.id }, { highlighted: false });
   lastHighlight = null;
+}
+
+function clearSearchMarker() {
+  if (!searchMarker) return;
+  searchMarker.remove();
+  searchMarker = null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────

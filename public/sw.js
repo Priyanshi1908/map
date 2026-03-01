@@ -9,7 +9,7 @@
  *            evicted when cache exceeds MAX_TILE_ENTRIES)
  */
 
-const VERSION = 'v5';
+const VERSION = 'v8';
 const SHELL_CACHE = `hypermap-shell-${VERSION}`;
 const DATA_CACHE  = `hypermap-data-${VERSION}`;
 const TILE_CACHE  = `hypermap-tiles-${VERSION}`;
@@ -68,6 +68,12 @@ self.addEventListener('fetch', e => {
 
   const url = new URL(request.url);
 
+  // SPA routing: serve cached index.html for all same-origin navigation requests
+  if (request.mode === 'navigate' && url.origin === self.location.origin) {
+    e.respondWith(cacheFirst(SHELL_CACHE, new Request('/')));
+    return;
+  }
+
   // 1. Our data files → cache-first (they never change between deploys)
   if (url.origin === self.location.origin && DATA_URLS.includes(url.pathname)) {
     e.respondWith(cacheFirst(DATA_CACHE, request));
@@ -97,6 +103,9 @@ self.addEventListener('fetch', e => {
 function isMapResource(url) {
   // OpenFreeMap tiles + style
   if (url.hostname.includes('openfreemap.org')) return true;
+  // CARTO basemaps (dark matter style + tiles)
+  if (url.hostname.includes('cartocdn.com')) return true;
+  if (url.hostname.includes('carto.com')) return true;
   // MapTiler, Protomaps, other common tile CDNs
   if (url.hostname.includes('maptiler')) return true;
   if (url.hostname.includes('protomaps')) return true;
